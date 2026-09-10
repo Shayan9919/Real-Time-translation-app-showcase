@@ -43,25 +43,17 @@ The app is fully bilingual. The whole UI works in English (LTR) and Farsi (RTL),
 | Dashboard | Next.js, React, Tailwind, Recharts |
 | Storage | SQLite for call metrics and transcripts |
 
-Rough size: about 10k lines of Dart in the app and 7.5k lines of Python in the backend, plus the native iOS/Android pieces and the dashboard.
-
 ## The parts that took real work
 
-**Turn-taking on phone calls.** Two people talking over each other through a translator is a mess, so the call works like a hands-free walkie-talkie. The backend does voice activity detection on each leg, gives the floor to one speaker at a time, buffers the translation as it streams in, and starts synthesising speech in the background as soon as the sentence is stable. Playback begins after a short silence window. The gap from "stopped talking" to "hearing the translation" is around two seconds.
+**Turn-taking on phone calls.** Two people talking over each other through a translator is a mess, so the call works like a hands-free walkie-talkie. The backend decides who has the floor, prepares the translated speech while the person is still talking, and plays it once they stop. The gap between finishing a sentence and hearing it translated is around two seconds.
 
-**Keeping latency honest.** Every audio chunk is timestamped through the whole pipeline, and each call records per-turn "speech to playback" timings and a realtime lag timeseries per leg. The dashboard flags calls where the audio stream starved. This is how I found out that a latency drift I'd been chasing for weeks was actually an inbound media quality problem on the carrier side, which their engineering team later confirmed, and not something in my code.
+**Knowing where the time goes.** Audio is timestamped through the whole pipeline, and every call is recorded with per-turn timings and quality flags that the dashboard can show. That instrumentation is how I found out that a latency drift I'd been chasing for weeks was a carrier-side media problem, later confirmed by their engineering team, and not something in my code.
 
-**Audio mixing on the outbound leg.** Forwarding the speaker's raw voice and the translated TTS to the listener at the same time originally produced overlapping audio. I replaced that with a small mixer that owns the outbound stream and schedules raw audio and TTS cleanly.
+**Captions on iOS and Android.** Neither platform makes this easy. Android needs an explicit screen-capture consent flow, a foreground service, and an overlay window drawn over other apps. iOS does not allow either, so the captions run in a native Picture in Picture window instead, which keeps them visible while the user is inside the video app.
 
-**iOS captions.** iOS does not let a normal app capture another app's audio or draw over it. The workaround was a native Picture in Picture window driven from Flutter through a platform channel, with the caption text rendered natively so it stays readable while the user is inside the video app.
+**Subtitles that don't flicker.** Live speech recognition constantly revises what it just heard. The backend splits its output into a settled part and a provisional tail, so the app can build a stable caption history instead of redrawing text that keeps changing.
 
-**Android captures.** Playback capture on Android 10+ needs a MediaProjection consent flow, a foreground service, and an overlay window. The subtitle strip crossfades between complete cues, can be dragged anywhere in the safe area, remembers its position across rotation, and hides itself when speech stops.
-
-**Caption stream protocol.** The backend separates translation text into a stable part that never changes and a provisional tail that can be replaced. The app builds its history from the stable text only, so subtitles don't flicker or duplicate when the recogniser revises itself. Shutdown is also handled properly: the backend waits for the recogniser's final tokens before closing the socket so the last sentence is never lost.
-
-**Security basics.** Webhook signature validation on all telephony endpoints, per-connection auth on the media WebSockets, phone numbers redacted from logs, a fail-closed token for the captions endpoint in production, and the speech provider key never leaves the backend.
-
-**Small things that turned out to be interesting.** A "stutter" on view transitions that instrumentation said was fine turned out to be a 28% brightness dip caused by stacked semi-transparent layers during the crossfade, not a dropped frame. Found it by screen recording and stepping through frames.
+**Security.** Signature validation on the telephony webhooks, authentication on the media connections, phone numbers kept out of logs, and speech provider keys that never leave the backend.
 
 ## Status
 
